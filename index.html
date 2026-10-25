@@ -192,10 +192,10 @@
     </button>
     <label for="select-theme" class="sr-only">Theme</label>
     <select id="select-theme" title="Block theme" class="glass-select px-2.5 py-1 rounded font-mono-tech text-[10px] font-bold uppercase">
-      <option value="snow" selected>Theme: Snow</option>
+      <option value="snow">Theme: Snow</option>
       <option value="stone">Theme: Stone</option>
       <option value="water">Theme: Water</option>
-      <option value="fire">Theme: Fire</option>
+      <option value="fire" selected>Theme: Fire</option>
       <option value="electric">Theme: Electric</option>
     </select>
   </div>
@@ -2385,6 +2385,8 @@ window.__ARJUN_TEX={albedo:"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2
         tex: IS_MOBILE ? 256 : 512    // generated sandstone canvases
       };
       const viewW = () => (window.visualViewport ? window.visualViewport.width : window.innerWidth);
+      // phones show only the letter A, large and centred (decided once at load)
+      const MOBILE_A = IS_MOBILE || window.innerWidth < 600;
       const viewH = () => (window.visualViewport ? window.visualViewport.height : window.innerHeight);
       const camera = new THREE.PerspectiveCamera(30, viewW() / viewH(), 0.1, 550);
       const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', failIfMajorPerformanceCaveat: false });
@@ -2973,9 +2975,15 @@ totalEmissiveRadiance += vec3(0.95, 0.98, 1.0) * tw * uFrost * 0.25 * uDis;
         const fov = aspect < 0.8 ? 44 : aspect < 1.2 ? 36 : 30;
         if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
         const vFovRad = (camera.fov * Math.PI) / 180;
-        const hFovRad = 2 * Math.atan(Math.tan(vFovRad / 2) * aspect);
-        const neededForWidth = (currentStructureSpanWidth * 0.58) / Math.tan(hFovRad / 2);
-        return Math.max(38, Math.min(195, neededForWidth));
+        const halfW = Math.tan(vFovRad / 2) * aspect;            // tan of half the horizontal field of view
+        // the default view: the word spans ~55% of the screen width, centred (measured from the agreed
+        // 1.89:1 desktop view). Same framing and distance on every wide screen; on narrow / portrait
+        // screens the word is allowed to fill more of the width (up to ~86%) so it never turns tiny
+        if (MOBILE_A) {
+          return Math.max(14, Math.min(120, Math.max(currentStructureSpanWidth / (2 * 0.92 * halfW), letterAHeight / (2 * 0.72 * Math.tan(vFovRad / 2)))));
+        }
+        const frac = aspect >= 1.5 ? 0.548 : aspect <= 0.6 ? 0.86 : 0.548 + (0.86 - 0.548) * ((1.5 - aspect) / 0.9);
+        return Math.max(20, Math.min(195, currentStructureSpanWidth / (2 * frac * halfW)));
       }
 
       const LETTER_SX = { A: 0.95, R: 0.90, J: 0.85, U: 0.90, N: 0.85 };
@@ -2995,7 +3003,34 @@ totalEmissiveRadiance += vec3(0.95, 0.98, 1.0) * tw * uFrost * 0.25 * uDis;
         return out;
       }
 
+      let letterAHeight = 10;
+      // phone mode: drop every letter but A from the scene and re-centre everything on it
+      function keepOnlyLetterA() {
+        const keep = bricks.filter((b) => b.mesh.userData.ch === 'A');
+        if (!keep.length) return;
+        bricks.forEach((b) => {
+          if (b.mesh.userData.ch === 'A') return;
+          brickGroup.remove(b.mesh);
+          if (b.core && b.core.parent) b.core.parent.remove(b.core);
+        });
+        bricks = keep;
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+        keep.forEach((b) => {
+          const g = b.mesh.geometry;
+          if (!g.boundingBox) g.computeBoundingBox();
+          const t = b.targets.monolith;
+          x0 = Math.min(x0, t.x + g.boundingBox.min.x); x1 = Math.max(x1, t.x + g.boundingBox.max.x);
+          y0 = Math.min(y0, t.y + g.boundingBox.min.y); y1 = Math.max(y1, t.y + g.boundingBox.max.y);
+        });
+        currentStructureCenterX = (x0 + x1) / 2;
+        currentStructureSpanWidth = (x1 - x0) + 1.2;
+        letterAHeight = (y1 - y0) + 0.8;
+      }
       function buildBrickScene(wordInput) {
+        buildBrickSceneFull(wordInput);
+        if (MOBILE_A) keepOnlyLetterA();
+      }
+      function buildBrickSceneFull(wordInput) {
         const cleanWord = (wordInput || state.word || 'ARJUN').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'ARJUN';
         state.word = cleanWord;
         document.getElementById('modal-word-label').textContent = cleanWord;
@@ -3521,7 +3556,7 @@ if (uTheme > 1.5 && uTheme < 2.5) {
         g.addColorStop(0, t.sky[0]); g.addColorStop(0.55, t.sky[1]); g.addColorStop(1, t.sky[2]);
         skyCtx.fillStyle = g; skyCtx.fillRect(0, 0, 4, 512);
         scene.background.needsUpdate = true;
-        scene.fog.color.setHex(t.fog); scene.fog.density = t.fogD;
+        scene.fog.color.setHex(t.fog); scene.fog.density = t.fogD * fogFit();
         terrainMat.color.setHex(t.ground);
         terrainMat.roughness = name === 'water' ? 0.25 : 0.92;
         sunLight.color.setHex(t.sun); sunLight.intensity = t.sunI;
@@ -4546,7 +4581,7 @@ void main() {
         let hitSt = null;
         if (pointerActive) {
           rockRay.setFromCamera(pointerNDC, camera);
-          const hit = rockRay.intersectObjects(desertRocks.children, false)[0];
+          const hit = rockRay.intersectObjects(desertRocks.children.filter((c) => c.visible), false)[0];
           if (hit) hitSt = rockStates.find((q) => q.m === hit.object) || null;
         }
         for (const st of rockStates) {
@@ -4575,7 +4610,7 @@ void main() {
         nextAutoPop -= dt;
         if (nextAutoPop <= 0) {
           nextAutoPop = rnd(3, 8);
-          const onScreen = rockStates.filter((q) => { _rkV.copy(q.rest).project(camera); return q.phase === 'rest' && q.cd <= 0 && Math.abs(_rkV.x) < 0.9 && _rkV.y > -0.95 && _rkV.y < 0.6 && _rkV.z < 1; });
+          const onScreen = rockStates.filter((q) => { _rkV.copy(q.rest).project(camera); return !q.mobileHidden && q.phase === 'rest' && q.cd <= 0 && Math.abs(_rkV.x) < 0.9 && _rkV.y > -0.95 && _rkV.y < 0.6 && _rkV.z < 1; });
           for (let n = Math.random() < 0.15 ? 2 : 1; n > 0 && onScreen.length; n--) {
             const st = onScreen.splice(Math.floor(Math.random() * onScreen.length), 1)[0];
             popRock(st, Math.sqrt(2 * 22 * rnd(0.8, 3.8)));        // takeoff speed for a 0.8-3.8 unit hop
@@ -4647,6 +4682,48 @@ void main() {
         }
         // the exposed lava lights up its surroundings
         if (glowSt) { pitLight.position.set(glowSt.rest.x, glowSt.rest.y + 1.2, glowSt.rest.z); pitLight.intensity = glowSt.open * 6 + Math.sin(time * 11) * 0.4 * glowSt.open + (glowSt.flash || 0) * 3.5; }
+      }
+      // phone mode: place five stones on the sand at fixed spots in the bottom 30% of the screen (in front
+      // of the A), hide the rest
+      const MOBILE_ROCK_SPOTS = [[-0.6, -0.48], [0.1, -0.53], [0.62, -0.46], [-0.3, -0.7], [0.42, -0.72]]; // bottom 30%, clear of the controls
+      function layoutRocksForMobile() {
+        if (!MOBILE_A) return;
+        const cam = camera.clone();
+        const R = camSpherical.targetRadius, th = CAM_THETA0, ph = CAM_PHI0, fx = currentStructureCenterX;
+        cam.position.set(R * Math.sin(ph) * Math.sin(th) + fx, R * Math.cos(ph) + 0.35, R * Math.sin(ph) * Math.cos(th));
+        cam.aspect = viewW() / viewH(); cam.updateProjectionMatrix();
+        cam.lookAt(fx, 0.7, 0); cam.updateMatrixWorld(true);
+        const v = new THREE.Vector3(), dir = new THREE.Vector3(), pnt = new THREE.Vector3();
+        rockStates.forEach((st, i) => {
+          const spot = MOBILE_ROCK_SPOTS[i];
+          st.mobileHidden = !spot;
+          st.m.visible = !!spot; st.pit.visible = !!spot;
+          if (!spot) return;
+          v.set(spot[0], spot[1], 0.5).unproject(cam);
+          dir.copy(v).sub(cam.position).normalize();
+          let hit = null;
+          for (let t = 1; t < 220; t += 0.25) {
+            pnt.copy(cam.position).addScaledVector(dir, t);
+            if (pnt.y <= duneY(pnt.x, pnt.z)) { hit = pnt.clone(); break; }
+          }
+          if (!hit) { st.mobileHidden = true; st.m.visible = st.pit.visible = false; return; }
+          // this close to the camera the stones read huge: shrink them (and their physics hull / pit) once
+          if (!st.mobileScaled) {
+            const k = 0.42;
+            st.mobileScaled = true;
+            st.m.scale.multiplyScalar(k); st.pit.scale.setScalar(k);
+            st.hull.forEach((h) => h.multiplyScalar(k));
+            st.restLow *= k; st.m.userData.r *= k;
+          }
+          const r = st.m.userData.r, rad = r * Math.max(st.m.scale.x, st.m.scale.z) * 1.15;
+          st.rest.set(hit.x, duneY(hit.x, hit.z) - r * 0.12, hit.z);
+          let py = -1e9;
+          for (let a = 0; a < 6; a++) py = Math.max(py, duneY(hit.x + Math.cos(a) * rad, hit.z + Math.sin(a) * rad));
+          st.ground = Math.max(py, duneY(hit.x, hit.z));
+          st.pit.position.set(hit.x, st.ground + 0.04, hit.z);
+          st.y = st.vy = 0; st.phase = 'rest'; st.rot.set(0, 0, 0);
+          st.m.position.copy(st.rest); st.m.rotation.copy(st.restRot);
+        });
       }
       function resetFireRocks() {
         for (const st of rockStates) {
@@ -5158,7 +5235,7 @@ void main() { float d = length(gl_PointCoord - 0.5); gl_FragColor = vec4(0.95, 0
         gustK = Math.max(0, Math.sin(time * 0.31) * 0.6 + Math.sin(time * 0.83 + 1.3) * 0.4) ** 1.5;
         gustPhase += dt * gustK * 10;
         stormU.uTime.value = time; stormU.uGust.value = gustPhase;
-        scene.fog.density = THEMES.snow.fogD * (1 + gustK * 0.8);
+        scene.fog.density = THEMES.snow.fogD * (1 + gustK * 0.8) * fogFit();
         // blowing snow streaming low over the floor
         for (let k = chance((6 + gustK * 30) * dt); k > 0; k--) {
           spawn(fxMist, { p: [rnd(-50, -10), rnd(-5.3, -4.2), rnd(-6, 18)], v: [rnd(9, 15) * (0.6 + gustK), rnd(-0.1, 0.4), rnd(-0.5, 0.5)], life: rnd(2.5, 4), s0: rnd(2, 3), s1: rnd(6, 10), a: 0.22 + gustK * 0.2, c0: [0.95, 0.97, 1], c1: [0.9, 0.94, 1], d: 0.05 });
@@ -5570,7 +5647,7 @@ void main() { float d = length(gl_PointCoord - 0.5); gl_FragColor = vec4(0.95, 0
       }
 
       document.getElementById('select-theme').addEventListener('change', (e) => {
-        camSpherical.radius += camSpherical.targetRadius * 0.08; // gentle push back in on theme change
+        camSpherical.radius = Math.min(fitRadius * 1.2, camSpherical.radius + camSpherical.targetRadius * 0.08); // gentle push back in on theme change
         initAudio();
         applyTheme(e.target.value);
         playThemeStinger(e.target.value);
@@ -5592,7 +5669,7 @@ void main() { float d = length(gl_PointCoord - 0.5); gl_FragColor = vec4(0.95, 0
       const valZoom = document.getElementById('val-zoom');
 
       function updateZoomUI(rad) {
-        camSpherical.targetRadius = Math.max(25, Math.min(200, rad));
+        camSpherical.targetRadius = Math.max(fitRadius * (MOBILE_A ? 0.9 : 0.75), Math.min(fitRadius * (MOBILE_A ? 1.1 : 1.2), rad));
         if (sliderZoom) sliderZoom.value = String(Math.round(camSpherical.targetRadius));
         if (valZoom) {
           const fitR = computeFitRadius();
@@ -5601,8 +5678,19 @@ void main() { float d = length(gl_PointCoord - 0.5); gl_FragColor = vec4(0.95, 0
         }
       }
 
+      // the camera stays on the front view: +/-30 deg left-right around the default angle, a small tilt
+      // range, and zoom close to the default distance, so the unfinished back/edges of the world never show
+      const CAM_THETA0 = -0.06, CAM_PHI0 = 1.545, CAM_YAW = (30 * Math.PI) / 180;
+      const clampTheta = (v) => Math.max(CAM_THETA0 - CAM_YAW, Math.min(CAM_THETA0 + CAM_YAW, v));
+      const clampPhi = (v) => Math.max(CAM_PHI0 - 0.12, Math.min(1.56, v));  // about 7 deg of tilt
+      let fitRadius = 66;
+      // the default view is ~66 units from the word; further back (portrait screens) thins the fog to match
+      const fogFit = () => Math.min(1, Math.pow(66 / Math.max(1, fitRadius), 1.6));
       function fitFullWordInView() {
         const fitR = computeFitRadius();
+        fitRadius = fitR;
+        if (MOBILE_A) { camSpherical.targetRadius = fitR; layoutRocksForMobile(); }
+        if (THEMES[currentTheme]) scene.fog.density = THEMES[currentTheme].fogD * fogFit();
         camSpherical.targetTheta = -0.06;
         camSpherical.targetPhi = 1.545;
         updateZoomUI(fitR);
@@ -5642,8 +5730,8 @@ void main() { float d = length(gl_PointCoord - 0.5); gl_FragColor = vec4(0.95, 0
         pointerVelocity = Math.min(1.0, Math.hypot(dx, dy) / 30);
 
         if (isDragging) {
-          camSpherical.targetTheta -= dx * 0.006;
-          camSpherical.targetPhi = Math.max(0.45, Math.min(1.56, camSpherical.targetPhi - dy * 0.005));
+          camSpherical.targetTheta = clampTheta(camSpherical.targetTheta - dx * 0.006);
+          camSpherical.targetPhi = clampPhi(camSpherical.targetPhi - dy * 0.005);
           prevMouse.x = e.clientX;
           prevMouse.y = e.clientY;
         }
@@ -6128,9 +6216,10 @@ print("Generated ${exportedPolys.length * 2} 6-course 2-layer carved stone block
       // =========================================================================
       buildBrickScene('ARJUN');
       // restore the last theme the viewer picked (per-browser convenience only)
-      let savedTheme = 'snow';
-      try { savedTheme = localStorage.getItem('arjunTheme') || 'snow'; } catch (e) { /* storage unavailable */ }
-      if (!THEMES[savedTheme]) savedTheme = 'snow';
+      // first visit opens on Fire; a theme the visitor picked before is remembered
+      let savedTheme = 'fire';
+      try { savedTheme = localStorage.getItem('arjunTheme') || 'fire'; } catch (e) { /* storage unavailable */ }
+      if (!THEMES[savedTheme]) savedTheme = 'fire';
       document.getElementById('select-theme').value = savedTheme;
       applyTheme(savedTheme);
       // Hold the word back until the Blender blocks are decoded (max 2.5 s), then rebuild with them,
@@ -6152,9 +6241,9 @@ print("Generated ${exportedPolys.length * 2} 6-course 2-layer carved stone block
       camSpherical.phi = camSpherical.targetPhi;
       // intro: start wide, high and off to one side, then glide in to the framed word
       const introStart = performance.now();
-      camSpherical.radius = camSpherical.targetRadius * 1.8;
-      camSpherical.phi = 1.2;
-      camSpherical.theta = -0.6;
+      camSpherical.radius = camSpherical.targetRadius * 1.2;
+      camSpherical.phi = CAM_PHI0 - 0.1;
+      camSpherical.theta = CAM_THETA0 - CAM_YAW * 0.7;
 
       // adaptive resolution: if the frame rate sags for 2 s, render fewer pixels; climb back
       // when there is headroom, but never back to a level that was already too slow
@@ -6220,10 +6309,11 @@ print("Generated ${exportedPolys.length * 2} 6-course 2-layer carved stone block
         camSpherical.phi += (camSpherical.targetPhi - camSpherical.phi) * camK;
         camSpherical.radius += (camSpherical.targetRadius - camSpherical.radius) * camK;
 
-        camera.position.x = camSpherical.radius * Math.sin(camSpherical.phi) * Math.sin(camSpherical.theta);
+        const camFocusX = MOBILE_A ? currentStructureCenterX : -1.0;
+        camera.position.x = camSpherical.radius * Math.sin(camSpherical.phi) * Math.sin(camSpherical.theta) + (MOBILE_A ? currentStructureCenterX : 0);
         camera.position.y = camSpherical.radius * Math.cos(camSpherical.phi) + 0.35;
         camera.position.z = camSpherical.radius * Math.sin(camSpherical.phi) * Math.cos(camSpherical.theta);
-        camera.lookAt(-1.0, 0.7, 0);
+        camera.lookAt(camFocusX, 0.7, 0);
 
         // Cursor -> point on the wall's front plane. igloo.inc pushes blocks by screen proximity,
         // so we use the plane (not a block hit) to avoid feedback once blocks start moving.
@@ -6259,8 +6349,15 @@ print("Generated ${exportedPolys.length * 2} 6-course 2-layer carved stone block
         const waveOn = state.waveLoop && now > (state.hoverHoldUntil || 0);
         if (waveOn) state.wavePhase += Math.min(1, (now - prevFrameTime) / 1000) * (Math.PI * 2 * state.waveSpeed) / 4.05;
         const waveHalfSpan = currentStructureSpanWidth * 0.52;
-        const waveFocusX = currentStructureCenterX - Math.cos(state.wavePhase) * waveHalfSpan;
-        const waveFocusY = 0.2 + Math.sin(state.wavePhase * 2.3) * 1.3 + Math.sin(state.wavePhase * 0.7 + 1.1) * 0.6;
+        let waveFocusX = currentStructureCenterX - Math.cos(state.wavePhase) * waveHalfSpan;
+        let waveFocusY = 0.2 + Math.sin(state.wavePhase * 2.3) * 1.3 + Math.sin(state.wavePhase * 0.7 + 1.1) * 0.6;
+        if (MOBILE_A && wordBoxFor === bricks.length) {
+          // bottom-left -> apex -> bottom-right -> apex -> ... along the A's two legs
+          const u = (1 - Math.cos(state.wavePhase)) / 2;
+          const legHalf = (currentStructureSpanWidth - 1.2) * 0.42;
+          waveFocusX = currentStructureCenterX - legHalf + u * legHalf * 2;
+          waveFocusY = wordMinY + (1 - Math.abs(2 * u - 1)) * (wordMaxY - wordMinY);
+        }
 
         // the light glides to the cursor while it is over the word (or to the wave otherwise);
         // easing it avoids the flicker of it snapping back and forth as pushed blocks slide away
