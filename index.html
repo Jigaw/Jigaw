@@ -4448,6 +4448,11 @@ if (uTheme > 2.5 && uTheme < 3.5) {
           desertRocks.add(m);
         }
       }
+      // the far-left front stone sits better over on the right, where the foreground was empty
+      {
+        const mv = desertRocks.children[2];
+        if (mv) mv.position.set(13.4, duneY(13.4, 27.2) - mv.userData.r * 0.12, 27.2);
+      }
       desertRocks.visible = false;
       scene.add(desertRocks);
 
